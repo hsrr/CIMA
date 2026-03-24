@@ -353,6 +353,8 @@ def main_worker(gpu, args, config):
     warmup_steps = config['schedular']['warmup_epochs']  
     best = 0
     best_epoch = 0  
+    early_stop_patience = int(config.get('early_stop_patience', 0))
+    early_stop_bad_epochs = 0
 
     #### Dataset #### 
     if args.log:
@@ -462,6 +464,7 @@ def main_worker(gpu, args, config):
                      "F1_tok": "{:.4f}".format(F1_tok*100),
         }
         
+        stop_training = False
         if utils.is_main_process(): 
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                             **{f'val_{k}': v for k, v in val_stats.items()},
@@ -488,14 +491,32 @@ def main_worker(gpu, args, config):
                 }                    
             if (epoch % args.model_save_epoch == 0 and epoch!=0):
                 torch.save(save_obj, os.path.join(log_dir, 'checkpoint_%02d.pth'%epoch)) 
-            if float(val_stats['AUC_cls'])>best:
+            current_auc = float(val_stats['AUC_cls'])
+            if current_auc > best:
                 torch.save(save_obj, os.path.join(log_dir, 'checkpoint_best.pth')) 
-                best = float(val_stats['AUC_cls'])
-                best_epoch = epoch 
+                best = current_auc
+                early_stop_bad_epochs = 0
+                best_epoch = epoch
+            else:
+                early_stop_bad_epochs += 1
+            if early_stop_patience > 0 and early_stop_bad_epochs >= early_stop_patience:
+                stop_training = True
 
         if config['schedular']['sched'] != 'cosine_in_step':
-            lr_scheduler.step(epoch+warmup_steps+1)  
-        dist.barrier() 
+            lr_scheduler.step(epoch+warmup_steps+1)
+
+        stop_tensor = torch.tensor(int(stop_training), device=device)
+        if dist.is_available() and dist.is_initialized():
+            dist.broadcast(stop_tensor, src=0)
+            dist.barrier()
+        if stop_tensor.item() == 1:
+            if utils.is_main_process() and args.log:
+                print(
+                    f"Early stopping triggered at epoch {epoch}; "
+                    f"best AUC_cls={best:.4f} at epoch {best_epoch}",
+                    flush=True,
+                )
+            break
 
     if utils.is_main_process():
         torch.save(save_obj, os.path.join(log_dir, 'checkpoint_%02d.pth'%epoch))   
