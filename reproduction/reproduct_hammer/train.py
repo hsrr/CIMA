@@ -43,6 +43,12 @@ from models import box_ops
 from tools.multilabel_metrics import AveragePrecisionMeter, get_multi_label
 from models.HAMMER import HAMMER
 
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    return str(v).lower() in ("1", "true", "yes", "y", "t")
+
 def setlogger(log_file):
     filehandler = logging.FileHandler(log_file)
     streamhandler = logging.StreamHandler()
@@ -385,14 +391,31 @@ def main_worker(gpu, args, config):
     
     if args.checkpoint:    
         checkpoint = torch.load(args.checkpoint, map_location='cpu') 
-        state_dict = checkpoint['model']                       
+        state_dict = checkpoint['model']
         if args.resume:
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-            start_epoch = checkpoint['epoch']+1         
+            can_resume = all(k in checkpoint for k in ['optimizer', 'lr_scheduler', 'epoch'])
+            if can_resume:
+                try:
+                    optimizer.load_state_dict(checkpoint['optimizer'])
+                    lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
+                    start_epoch = checkpoint['epoch'] + 1
+                except Exception as e:
+                    if args.log:
+                        print(f"Resume state mismatch, fallback to model-only load: {e}")
+                    args.resume = False
+            else:
+                if args.log:
+                    print("Checkpoint missing optimizer/scheduler/epoch, fallback to model-only load")
+                args.resume = False
+
+        if not args.resume:
+            if 'visual_encoder.pos_embed' in state_dict:
+                pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder.pos_embed'], model.visual_encoder)   
+                state_dict['visual_encoder.pos_embed'] = pos_embed_reshaped
         else:
-            pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder.pos_embed'],model.visual_encoder)   
-            state_dict['visual_encoder.pos_embed'] = pos_embed_reshaped       
+            if 'visual_encoder.pos_embed' in state_dict:
+                pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder.pos_embed'], model.visual_encoder)   
+                state_dict['visual_encoder.pos_embed'] = pos_embed_reshaped
         # model.load_state_dict(state_dict)  
         if args.log:
             print('load checkpoint from %s'%args.checkpoint)  
@@ -539,7 +562,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='./configs/Pretrain.yaml')
     parser.add_argument('--checkpoint', default='') 
-    parser.add_argument('--resume', default=True, type=bool)
+    parser.add_argument('--resume', default=False, type=str2bool)
     parser.add_argument('--output_dir', default='results')
     parser.add_argument('--text_encoder', default="./datasets/bert_base_uncased/")
     parser.add_argument('--device', default='cuda')
