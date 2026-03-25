@@ -1,6 +1,7 @@
 from functools import partial
 from models.vit import VisionTransformer, interpolate_pos_embed
 
+import os
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -33,9 +34,16 @@ class HAMMER(nn.Module):
             mlp_ratio=4, qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6))   
         
         if init_deit:
-            checkpoint = torch.hub.load_state_dict_from_url(
-                url="https://dl.fbaipublicfiles.com/deit/deit_base_patch16_224-b5f2ef4d.pth",
-                map_location="cpu", check_hash=True)
+            deit_ckpt = os.environ.get(
+                "DEIT_CKPT",
+                "https://dl.fbaipublicfiles.com/deit/deit_base_patch16_224-b5f2ef4d.pth",
+            )
+            if deit_ckpt.startswith("http://") or deit_ckpt.startswith("https://"):
+                checkpoint = torch.hub.load_state_dict_from_url(
+                    url=deit_ckpt, map_location="cpu", check_hash=True
+                )
+            else:
+                checkpoint = torch.load(deit_ckpt, map_location="cpu")
             state_dict = checkpoint["model"]
             pos_embed_reshaped = interpolate_pos_embed(state_dict['pos_embed'], self.visual_encoder)
             state_dict['pos_embed'] = pos_embed_reshaped

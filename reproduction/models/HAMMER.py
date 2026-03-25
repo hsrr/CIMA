@@ -1,6 +1,7 @@
 from functools import partial
 from models.vit import VisionTransformer, interpolate_pos_embed
 from models.xbert import BertConfig, BertForMaskedLM, BertForTokenClassification
+import os
 
 import torch
 import torch.nn.functional as F
@@ -12,6 +13,32 @@ import random
 from models import box_ops
 from tools.multilabel_metrics import get_multi_label
 from timm.models.layers import trunc_normal_
+
+def load_deit_checkpoint(args=None, config=None):
+    default_deit = "https://dl.fbaipublicfiles.com/deit/deit_base_patch16_224-b5f2ef4d.pth"
+    source = default_deit
+    if args is not None and getattr(args, "deit_checkpoint", ""):
+        source = args.deit_checkpoint
+    elif config is not None and config.get("deit_checkpoint", ""):
+        source = config["deit_checkpoint"]
+    elif os.environ.get("DEIT_CHECKPOINT", ""):
+        source = os.environ["DEIT_CHECKPOINT"]
+
+    if source.startswith("http://") or source.startswith("https://"):
+        checkpoint = torch.hub.load_state_dict_from_url(
+            url=source, map_location="cpu", check_hash=False
+        )
+    elif os.path.isfile(source):
+        checkpoint = torch.load(source, map_location="cpu")
+    else:
+        raise ValueError(
+            f"Invalid deit_checkpoint source: {source}. "
+            "Provide a valid local file path or http(s) URL."
+        )
+
+    if isinstance(checkpoint, dict) and "model" in checkpoint:
+        return checkpoint["model"]
+    return checkpoint
 
 class HAMMER(nn.Module):
     def __init__(self, 
@@ -32,10 +59,7 @@ class HAMMER(nn.Module):
             mlp_ratio=4, qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6))   
         
         if init_deit:
-            checkpoint = torch.hub.load_state_dict_from_url(
-                url="https://dl.fbaipublicfiles.com/deit/deit_base_patch16_224-b5f2ef4d.pth",
-                map_location="cpu", check_hash=True)
-            state_dict = checkpoint["model"]
+            state_dict = load_deit_checkpoint(args=args, config=config)
             pos_embed_reshaped = interpolate_pos_embed(state_dict['pos_embed'], self.visual_encoder)
             state_dict['pos_embed'] = pos_embed_reshaped
             msg = self.visual_encoder.load_state_dict(state_dict,strict=False)

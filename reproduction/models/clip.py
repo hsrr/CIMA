@@ -5,6 +5,7 @@ from models.vit import VisionTransformer, interpolate_pos_embed
 import torch
 import torch.nn.functional as F
 from torch import nn
+import os
 
 import numpy as np
 import random
@@ -59,9 +60,18 @@ class HAMMER(nn.Module):
             mlp_ratio=4, qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6))   
         
         if init_deit:
-            checkpoint = torch.hub.load_state_dict_from_url(
-                url="https://dl.fbaipublicfiles.com/deit/deit_base_patch16_224-b5f2ef4d.pth",
-                map_location="cpu", check_hash=True)
+            deit_source = config.get(
+                'deit_pretrained',
+                "https://dl.fbaipublicfiles.com/deit/deit_base_patch16_224-b5f2ef4d.pth",
+            )
+            if isinstance(deit_source, str) and os.path.isfile(deit_source):
+                checkpoint = torch.load(deit_source, map_location="cpu")
+            else:
+                checkpoint = torch.hub.load_state_dict_from_url(
+                    url=deit_source,
+                    map_location="cpu",
+                    check_hash=True,
+                )
             state_dict = checkpoint["model"]
             pos_embed_reshaped = interpolate_pos_embed(state_dict['pos_embed'], self.visual_encoder)
             state_dict['pos_embed'] = pos_embed_reshaped
