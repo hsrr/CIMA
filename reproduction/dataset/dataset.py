@@ -18,13 +18,65 @@ import math
 import random
 from random import random as rand
 
+def load_annotations(paths):
+    anns = []
+    decoder = json.JSONDecoder()
+    for fpath in paths:
+        with open(fpath, 'r', encoding='utf-8') as f:
+            content = f.read().strip()
+        if not content:
+            continue
+
+        # Case 1: standard JSON (list or dict)
+        try:
+            obj = json.loads(content)
+            if isinstance(obj, list):
+                anns.extend(obj)
+            else:
+                anns.append(obj)
+            continue
+        except json.JSONDecodeError:
+            pass
+
+        # Case 2: concatenated JSON blocks in one file
+        idx = 0
+        parsed_any = False
+        while idx < len(content):
+            while idx < len(content) and content[idx].isspace():
+                idx += 1
+            if idx >= len(content):
+                break
+            try:
+                obj, end = decoder.raw_decode(content, idx)
+            except json.JSONDecodeError:
+                break
+            parsed_any = True
+            if isinstance(obj, list):
+                anns.extend(obj)
+            else:
+                anns.append(obj)
+            idx = end
+        if parsed_any:
+            continue
+
+        # Case 3: JSONL (one json object per line)
+        with open(fpath, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                if isinstance(obj, list):
+                    anns.extend(obj)
+                else:
+                    anns.append(obj)
+    return anns
+
 class DGM4_Dataset(Dataset):
     def __init__(self, config, ann_file, transform, max_words=30, is_train=True): 
         
         self.root_dir = './datasets'
-        self.ann = []
-        for f in ann_file:
-            self.ann += json.load(open(f,'r'))
+        self.ann = load_annotations(ann_file)
         if 'dataset_division' in config:
             self.ann = self.ann[:int(len(self.ann)/config['dataset_division'])]
 
@@ -110,9 +162,7 @@ class Clip_Dataset(Dataset):
     def __init__(self, config, ann_file, max_words=30, is_train=True): 
         
         self.root_dir = './datasets/'
-        self.ann = []
-        for f in ann_file:
-            self.ann += json.load(open(f,'r'))
+        self.ann = load_annotations(ann_file)
         if 'dataset_division' in config:
             self.ann = self.ann[:int(len(self.ann)/config['dataset_division'])]
 
@@ -198,9 +248,7 @@ class Vilt_Dataset(Dataset):
     def __init__(self, config, ann_file, max_words=30, is_train=True):
 
         self.root_dir = './DGM4/datasets'
-        self.ann = []
-        for f in ann_file:
-            self.ann += json.load(open(f, 'r'))
+        self.ann = load_annotations(ann_file)
         if 'dataset_division' in config:
             self.ann = self.ann[:int(len(self.ann) / config['dataset_division'])]
 
