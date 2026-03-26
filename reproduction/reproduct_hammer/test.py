@@ -37,6 +37,7 @@ from tqdm import tqdm
 
 from sklearn.metrics import roc_auc_score
 from sklearn.metrics import roc_curve
+from sklearn.metrics import f1_score
 from scipy.optimize import brentq
 from scipy.interpolate import interp1d
 
@@ -101,6 +102,9 @@ def text_input_adjust(text_input, fake_word_pos, device):
     return text_input, fake_token_pos_batch, subword_idx_rm_CLSSEP_batch
 
   
+def safe_div(num, den):
+    return num / den if den != 0 else 0.0
+
 
 @torch.no_grad()
 def evaluation(args, model, data_loader, tokenizer, device, config):
@@ -113,7 +117,7 @@ def evaluation(args, model, data_loader, tokenizer, device, config):
     print('Computing features for evaluation...')
     print_freq = 200 
 
-    y_true, y_pred, IOU_pred, IOU_50, IOU_75, IOU_95 = [], [], [], [], [], []
+    y_true, y_pred, y_pred_label, IOU_pred, IOU_50, IOU_75, IOU_95 = [], [], [], [], [], [], []
     cls_nums_all = 0
     cls_acc_all = 0   
 
@@ -151,6 +155,7 @@ def evaluation(args, model, data_loader, tokenizer, device, config):
         y_true.extend(cls_label.cpu().flatten().tolist())
 
         pred_acc = logits_real_fake.argmax(1)
+        y_pred_label.extend(pred_acc.cpu().flatten().tolist())
         cls_nums_all += cls_label.shape[0]
         cls_acc_all += torch.sum(pred_acc == cls_label).item()
 
@@ -210,9 +215,10 @@ def evaluation(args, model, data_loader, tokenizer, device, config):
         FN_all += torch.sum((token_label_reshape == 1) * (logits_tok_pred == 0)).item()
                  
     ##================= real/fake cls ========================## 
-    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    y_true, y_pred, y_pred_label = np.array(y_true), np.array(y_pred), np.array(y_pred_label)
     AUC_cls = roc_auc_score(y_true, y_pred)
     ACC_cls = cls_acc_all / cls_nums_all
+    BF1_cls = f1_score(y_true, y_pred_label, zero_division=0)
     fpr, tpr, thresholds = roc_curve(y_true, y_pred, pos_label=1)
     EER_cls = brentq(lambda x: 1. - x - interp1d(fpr, tpr)(x), 0., 1.)
     
@@ -222,20 +228,20 @@ def evaluation(args, model, data_loader, tokenizer, device, config):
     IOU_ACC_75 = sum(IOU_75)/len(IOU_75)
     IOU_ACC_95 = sum(IOU_95)/len(IOU_95)
     # ##================= token cls========================##
-    ACC_tok = (TP_all + TN_all) / (TP_all + TN_all + FP_all + FN_all)
-    Precision_tok = TP_all / (TP_all + FP_all)
-    Recall_tok = TP_all / (TP_all + FN_all)
-    F1_tok = 2*Precision_tok*Recall_tok / (Precision_tok + Recall_tok)
+    ACC_tok = safe_div((TP_all + TN_all), (TP_all + TN_all + FP_all + FN_all))
+    Precision_tok = safe_div(TP_all, (TP_all + FP_all))
+    Recall_tok = safe_div(TP_all, (TP_all + FN_all))
+    F1_tok = safe_div((2 * Precision_tok * Recall_tok), (Precision_tok + Recall_tok))
     ##================= multi-label cls ========================## 
     MAP = multi_label_meter.value().mean()
     OP, OR, OF1, CP, CR, CF1 = multi_label_meter.overall()
             
     for cls_idx in range(logits_multicls.shape[1]):
-        Precision_multicls = TP_all_multicls[cls_idx] / (TP_all_multicls[cls_idx] + FP_all_multicls[cls_idx])
-        Recall_multicls = TP_all_multicls[cls_idx] / (TP_all_multicls[cls_idx] + FN_all_multicls[cls_idx])
-        F1_multicls[cls_idx] = 2*Precision_multicls*Recall_multicls / (Precision_multicls + Recall_multicls)            
+        Precision_multicls = safe_div(TP_all_multicls[cls_idx], (TP_all_multicls[cls_idx] + FP_all_multicls[cls_idx]))
+        Recall_multicls = safe_div(TP_all_multicls[cls_idx], (TP_all_multicls[cls_idx] + FN_all_multicls[cls_idx]))
+        F1_multicls[cls_idx] = safe_div((2 * Precision_multicls * Recall_multicls), (Precision_multicls + Recall_multicls))            
 
-    return AUC_cls, ACC_cls, EER_cls, \
+    return AUC_cls, ACC_cls, BF1_cls, EER_cls, \
         MAP.item(), OP, OR, OF1, CP, CR, CF1, F1_multicls, \
         IOU_score, IOU_ACC_50, IOU_ACC_75, IOU_ACC_95, \
         ACC_tok, Precision_tok, Recall_tok, F1_tok
@@ -321,13 +327,14 @@ def main_worker(gpu, args, config):
     if args.log:
         print("Start evaluation")
 
-    AUC_cls, ACC_cls, EER_cls, \
+    AUC_cls, ACC_cls, BF1_cls, EER_cls, \
     MAP, OP, OR, OF1, CP, CR, CF1, F1_multicls, \
     IOU_score, IOU_ACC_50, IOU_ACC_75, IOU_ACC_95, \
     ACC_tok, Precision_tok, Recall_tok, F1_tok  = evaluation(args, model_without_ddp, val_loader, tokenizer, device, config)
     #============ evaluation info ============#
     val_stats = {"AUC_cls": "{:.4f}".format(AUC_cls*100),
                     "ACC_cls": "{:.4f}".format(ACC_cls*100),
+                    "BF1_cls": "{:.4f}".format(BF1_cls*100),
                     "EER_cls": "{:.4f}".format(EER_cls*100),
                     "MAP": "{:.4f}".format(MAP*100),
                     "OP": "{:.4f}".format(OP*100),
