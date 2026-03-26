@@ -379,6 +379,10 @@ def main_worker(gpu, args, config):
         }
         all_eval_stats[eval_type] = val_stats
 
+        if args.log:
+            logger.info(f"[{eval_type}] val_file: {val_file}")
+            logger.info(f"[{eval_type}] metrics: {json.dumps(val_stats)}")
+
         if utils.is_main_process():
             log_stats = {**{f'val_{k}': v for k, v in val_stats.items()},
                             'epoch': args.test_epoch,
@@ -387,6 +391,8 @@ def main_worker(gpu, args, config):
                         }
             with open(os.path.join(log_dir, f"results_{eval_type}.txt"), "a") as f:
                 f.write(json.dumps(log_stats) + "\n")
+            if args.log:
+                logger.info(f"[{eval_type}] written to {os.path.join(log_dir, f'results_{eval_type}.txt')}")
 
     if utils.is_main_process() and len(val_files) > 1:
         merged_stats = {
