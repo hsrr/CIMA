@@ -333,8 +333,10 @@ def main_worker(gpu, args, config):
     ACC_tok, Precision_tok, Recall_tok, F1_tok  = evaluation(args, model_without_ddp, val_loader, tokenizer, device, config)
     #============ evaluation info ============#
     val_stats = {"AUC_cls": "{:.4f}".format(AUC_cls*100),
+                    "AUE_cls": "{:.4f}".format(AUC_cls*100),
                     "ACC_cls": "{:.4f}".format(ACC_cls*100),
                     "BF1_cls": "{:.4f}".format(BF1_cls*100),
+                    "BFI_cls": "{:.4f}".format(BF1_cls*100),
                     "EER_cls": "{:.4f}".format(EER_cls*100),
                     "MAP": "{:.4f}".format(MAP*100),
                     "OP": "{:.4f}".format(OP*100),
