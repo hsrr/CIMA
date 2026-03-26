@@ -5,6 +5,7 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import argparse
+import copy
 import ruamel_yaml as yaml
 import numpy as np
 import random
@@ -104,6 +105,13 @@ def text_input_adjust(text_input, fake_word_pos, device):
   
 def safe_div(num, den):
     return num / den if den != 0 else 0.0
+
+
+def resolve_eval_name(val_file):
+    eval_name = os.path.basename(val_file).split('.')[0]
+    if eval_name == 'test':
+        return 'all'
+    return eval_name
 
 
 @torch.no_grad()
@@ -253,12 +261,16 @@ def main_worker(gpu, args, config):
 
     init_dist(args)
 
-    eval_type = os.path.basename(config['val_file'][0]).split('.')[0]
-    if eval_type == 'test':
-        eval_type = 'all'
+    val_files = config.get('val_file', [])
+    if isinstance(val_files, str):
+        val_files = [val_files]
+    if not val_files:
+        raise ValueError("config['val_file'] is empty, please provide at least one eval annotation file.")
+
+    log_suffix = resolve_eval_name(val_files[0]) if len(val_files) == 1 else 'multi'
     log_dir = os.path.join(args.output_dir, args.log_num, 'evaluation')
     os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f'shell_{eval_type}.txt')
+    log_file = os.path.join(log_dir, f'shell_{log_suffix}.txt')
     logger = setlogger(log_file)
     
     if args.log:
@@ -301,70 +313,89 @@ def main_worker(gpu, args, config):
     if args.log:
         print(msg)  
 
-    #### Dataset #### 
-    if args.log:
-        print("Creating dataset")
-    _, val_dataset = create_dataset(config)
-    
-    if args.distributed:  
-        samplers = create_sampler([val_dataset], [True], args.world_size, args.rank) + [None]    
-    else:
-        samplers = [None]
-
-    val_loader = create_loader([val_dataset],
-                                samplers,
-                                batch_size=[config['batch_size_val']], 
-                                num_workers=[4], 
-                                is_trains=[False], 
-                                collate_fns=[None])[0]
-
-    
     model_without_ddp = model
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
 
-    if args.log:
-        print("Start evaluation")
+    all_eval_stats = {}
 
-    AUC_cls, ACC_cls, BF1_cls, EER_cls, \
-    MAP, OP, OR, OF1, CP, CR, CF1, F1_multicls, \
-    IOU_score, IOU_ACC_50, IOU_ACC_75, IOU_ACC_95, \
-    ACC_tok, Precision_tok, Recall_tok, F1_tok  = evaluation(args, model_without_ddp, val_loader, tokenizer, device, config)
-    #============ evaluation info ============#
-    val_stats = {"AUC_cls": "{:.4f}".format(AUC_cls*100),
-                    "AUE_cls": "{:.4f}".format(AUC_cls*100),
-                    "ACC_cls": "{:.4f}".format(ACC_cls*100),
-                    "BF1_cls": "{:.4f}".format(BF1_cls*100),
-                    "BFI_cls": "{:.4f}".format(BF1_cls*100),
-                    "EER_cls": "{:.4f}".format(EER_cls*100),
-                    "MAP": "{:.4f}".format(MAP*100),
-                    "OP": "{:.4f}".format(OP*100),
-                    "OR": "{:.4f}".format(OR*100),
-                    "OF1": "{:.4f}".format(OF1*100),
-                    "CP": "{:.4f}".format(CP*100),
-                    "CR": "{:.4f}".format(CR*100),
-                    "CF1": "{:.4f}".format(CF1*100),
-                    "F1_FS": "{:.4f}".format(F1_multicls[0]*100),
-                    "F1_FA": "{:.4f}".format(F1_multicls[1]*100),
-                    "F1_TS": "{:.4f}".format(F1_multicls[2]*100),
-                    "F1_TA": "{:.4f}".format(F1_multicls[3]*100),
-                    "IOU_score": "{:.4f}".format(IOU_score*100),
-                    "IOU_ACC_50": "{:.4f}".format(IOU_ACC_50*100),
-                    "IOU_ACC_75": "{:.4f}".format(IOU_ACC_75*100),
-                    "IOU_ACC_95": "{:.4f}".format(IOU_ACC_95*100),
-                    "ACC_tok": "{:.4f}".format(ACC_tok*100),
-                    "Precision_tok": "{:.4f}".format(Precision_tok*100),
-                    "Recall_tok": "{:.4f}".format(Recall_tok*100),
-                    "F1_tok": "{:.4f}".format(F1_tok*100),
-    }
-    
-    if utils.is_main_process(): 
-        log_stats = {**{f'val_{k}': v for k, v in val_stats.items()},
-                        'epoch': args.test_epoch,
-                    }             
-        with open(os.path.join(log_dir, f"results_{eval_type}.txt"),"a") as f:
-            f.write(json.dumps(log_stats) + "\n")
+    for val_file in val_files:
+        eval_type = resolve_eval_name(val_file)
+        eval_config = copy.deepcopy(config)
+        eval_config['val_file'] = [val_file]
+
+        #### Dataset ####
+        if args.log:
+            print(f"Creating dataset for {eval_type}: {val_file}")
+        _, val_dataset = create_dataset(eval_config)
+
+        if args.distributed:
+            samplers = create_sampler([val_dataset], [True], args.world_size, args.rank) + [None]
+        else:
+            samplers = [None]
+
+        val_loader = create_loader([val_dataset],
+                                   samplers,
+                                   batch_size=[eval_config['batch_size_val']],
+                                   num_workers=[4],
+                                   is_trains=[False],
+                                   collate_fns=[None])[0]
+
+        if args.log:
+            print(f"Start evaluation on {eval_type}")
+
+        AUC_cls, ACC_cls, BF1_cls, EER_cls, \
+        MAP, OP, OR, OF1, CP, CR, CF1, F1_multicls, \
+        IOU_score, IOU_ACC_50, IOU_ACC_75, IOU_ACC_95, \
+        ACC_tok, Precision_tok, Recall_tok, F1_tok = evaluation(args, model_without_ddp, val_loader, tokenizer, device, eval_config)
+
+        #============ evaluation info ============#
+        val_stats = {"AUC_cls": "{:.4f}".format(AUC_cls*100),
+                        "AUE_cls": "{:.4f}".format(AUC_cls*100),
+                        "ACC_cls": "{:.4f}".format(ACC_cls*100),
+                        "BF1_cls": "{:.4f}".format(BF1_cls*100),
+                        "BFI_cls": "{:.4f}".format(BF1_cls*100),
+                        "EER_cls": "{:.4f}".format(EER_cls*100),
+                        "MAP": "{:.4f}".format(MAP*100),
+                        "OP": "{:.4f}".format(OP*100),
+                        "OR": "{:.4f}".format(OR*100),
+                        "OF1": "{:.4f}".format(OF1*100),
+                        "CP": "{:.4f}".format(CP*100),
+                        "CR": "{:.4f}".format(CR*100),
+                        "CF1": "{:.4f}".format(CF1*100),
+                        "F1_FS": "{:.4f}".format(F1_multicls[0]*100),
+                        "F1_FA": "{:.4f}".format(F1_multicls[1]*100),
+                        "F1_TS": "{:.4f}".format(F1_multicls[2]*100),
+                        "F1_TA": "{:.4f}".format(F1_multicls[3]*100),
+                        "IOU_score": "{:.4f}".format(IOU_score*100),
+                        "IOU_ACC_50": "{:.4f}".format(IOU_ACC_50*100),
+                        "IOU_ACC_75": "{:.4f}".format(IOU_ACC_75*100),
+                        "IOU_ACC_95": "{:.4f}".format(IOU_ACC_95*100),
+                        "ACC_tok": "{:.4f}".format(ACC_tok*100),
+                        "Precision_tok": "{:.4f}".format(Precision_tok*100),
+                        "Recall_tok": "{:.4f}".format(Recall_tok*100),
+                        "F1_tok": "{:.4f}".format(F1_tok*100),
+        }
+        all_eval_stats[eval_type] = val_stats
+
+        if utils.is_main_process():
+            log_stats = {**{f'val_{k}': v for k, v in val_stats.items()},
+                            'epoch': args.test_epoch,
+                            'dataset': eval_type,
+                            'val_file': val_file,
+                        }
+            with open(os.path.join(log_dir, f"results_{eval_type}.txt"), "a") as f:
+                f.write(json.dumps(log_stats) + "\n")
+
+    if utils.is_main_process() and len(val_files) > 1:
+        merged_stats = {
+            'epoch': args.test_epoch,
+            'datasets': all_eval_stats,
+            'val_files': val_files,
+        }
+        with open(os.path.join(log_dir, "results_multi.txt"), "a") as f:
+            f.write(json.dumps(merged_stats) + "\n")
 
  
 if __name__ == '__main__':
