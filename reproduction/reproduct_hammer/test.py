@@ -120,6 +120,12 @@ def resolve_eval_name(val_file):
     return eval_name
 
 
+def get_run_root(output_dir, log_num):
+    if os.path.isabs(log_num):
+        return log_num
+    return os.path.join(output_dir, log_num)
+
+
 @torch.no_grad()
 def evaluation(args, model, data_loader, tokenizer, device, config):
     # test
@@ -273,8 +279,9 @@ def main_worker(gpu, args, config):
     if not val_files:
         raise ValueError("config['val_file'] is empty, please provide at least one eval annotation file.")
 
+    run_root = get_run_root(args.output_dir, args.log_num)
     log_suffix = resolve_eval_name(val_files[0]) if len(val_files) == 1 else 'multi'
-    log_dir = os.path.join(args.output_dir, args.log_num, 'evaluation')
+    log_dir = os.path.join(run_root, 'evaluation')
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, f'shell_{log_suffix}.txt')
     logger = setlogger(log_file)
@@ -297,7 +304,12 @@ def main_worker(gpu, args, config):
     cudnn.benchmark = True
 
 
-    #### Model #### 
+    #### Model ####
+    if os.path.sep in args.text_encoder and not os.path.isdir(args.text_encoder):
+        raise FileNotFoundError(
+            f"text_encoder path not found: {args.text_encoder}. "
+            "Please set --text_encoder to an existing local directory."
+        )
     tokenizer = BertTokenizerFast.from_pretrained(args.text_encoder)
     if args.log:
         print(f"Creating MAMMER")
@@ -305,7 +317,7 @@ def main_worker(gpu, args, config):
     
     model = model.to(device)   
 
-    checkpoint_dir = f'{args.output_dir}/{args.log_num}/checkpoint_{args.test_epoch}.pth'
+    checkpoint_dir = os.path.join(run_root, f'checkpoint_{args.test_epoch}.pth')
     checkpoint = torch.load(checkpoint_dir, map_location='cpu') 
     state_dict = checkpoint['model']                       
 
