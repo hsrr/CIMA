@@ -2,7 +2,13 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import os
+import sys
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPRO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
+if REPRO_ROOT not in sys.path:
+    sys.path.insert(0, REPRO_ROOT)
 
 import argparse
 import copy
