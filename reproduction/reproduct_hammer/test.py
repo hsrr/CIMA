@@ -273,6 +273,10 @@ def main_worker(gpu, args, config):
 
     init_dist(args)
 
+    env_text_encoder = os.environ.get("TEXT_ENCODER_PATH", "").strip()
+    if env_text_encoder and args.text_encoder == './datasets/bert_base_uncased/':
+        args.text_encoder = env_text_encoder
+
     val_files = config.get('val_file', [])
     if isinstance(val_files, str):
         val_files = [val_files]
@@ -292,6 +296,7 @@ def main_worker(gpu, args, config):
         logger.info('******************************')
         logger.info(config)
         logger.info('******************************')
+        logger.info(f'Using text_encoder: {args.text_encoder}')
 
     
     device = torch.device(args.device)
