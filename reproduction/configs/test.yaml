@@ -1,9 +1,9 @@
 train_file: ["./datasets/DGM4/metadata/train.json"]
 val_file:
-  - "./datasets/DGM4/metadata/test.json"
-  # Add more datasets here for one-shot evaluation, e.g.:
-  # - "./datasets/DGM4/metadata/bbc.json"
-  # - "./datasets/DGM4/metadata/wash.json"
+  - "/map-vepfs/liniuniu/hesirui/MultiModal-DeepFake-main/dataset/DGM4/metadata_split/bbc/test.json"
+  - "/map-vepfs/liniuniu/hesirui/MultiModal-DeepFake-main/dataset/DGM4/metadata_split/guardian/test.json"
+  - "/map-vepfs/liniuniu/hesirui/MultiModal-DeepFake-main/dataset/DGM4/metadata_split/usa_today/test.json"
+  - "/map-vepfs/liniuniu/hesirui/MultiModal-DeepFake-main/dataset/DGM4/metadata_split/washington_post/test.json"
 bert_config: 'configs/config_bert.json'
 
 image_res: 256 # for clip,change the image_res = 224          for vilt,change the image_res = 384
